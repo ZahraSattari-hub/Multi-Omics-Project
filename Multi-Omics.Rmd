@@ -1,0 +1,211 @@
+---
+title: "Multi-Omics"
+output: html_document
+---
+### Source: Nutrimouse Data (mixomics package)
+# Integration & Correlation Analysis of Lipidomics and Transcriptomics Data 
+
+## Prepare dataframes
+
+Install Biomanager and mixomics package
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+
+if (!requireNamespace("BiocManager", quietly = TRUE))    
+  install.packages("BiocManager")
+
+BiocManager::install("mixOmics")
+
+library(mixOmics) 
+```
+
+Set seed for reproducibility. And extract the data. 
+X includes all lipid concentration variables.
+Y includes all gene expression variables.
+Then use dim() to chekh the dimention of the dataframes you just created.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+set.seed(5249) 
+
+data(nutrimouse)
+X <- nutrimouse$lipid
+Y <- nutrimouse$gene 
+
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='show'}
+dim(X) 
+dim(Y) 
+
+```
+
+
+## Exploring Feature Correlation 
+
+imgcor() enables assessing the correlation structure of each data set both together but also separately. Adjust the image dimensions if needed.
+
+```{r echo=TRUE, fig.height=7, fig.keep="all", fig.width=15}
+
+print(imgCor(X, Y, sideColors = c("purple", "green")))
+
+
+```
+
+## rCCA Modeling 
+
+rCCA stands for Regularized Canonical Correlation Analysis
+This method is selected According to the Method Reference <https://mixomics.org/getting-started/selecting-your-method>
+
+2 omics, 1 study, N integration, unsupervised => rCCA
+
+
+λ₁, λ₂ are the penalty values to avoid over fitting  
+
+### Optimizing the model using ridge
+"Ridge" tunes (optimises) λ values by using cross-validation
+for cross validation we need to build grids
+
+tune.rcc() produces a heatmap helping with selecting λ1 and λ2
+The highest cross-validation score resulting from λ1 and λ2 is desired
+
+First set grid search values for each regularisation parameter.
+Then optimise the regularisation parameter values using tune.rcc()
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+grid1 <- seq(0.001, 0.2, length = 10) 
+grid2 <- seq(0.001, 0.2, length = 10)
+
+
+cv.tune.rcc.nutrimouse <- tune.rcc(X, Y, grid1 = grid1, grid2 = grid2, 
+                                   validation = "loo") 
+plot(cv.tune.rcc.nutrimouse)
+```
+
+The opt.lambda1 and opt.lambda2 components select the best parameter choice from the output of tune.rcc.
+
+Examine the results of CV tuning:
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='show'}
+cv.tune.rcc.nutrimouse
+
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+opt.l1 <- cv.tune.rcc.nutrimouse$opt.lambda1 # extract the optimal lambda values
+opt.l2 <- cv.tune.rcc.nutrimouse$opt.lambda2
+```
+
+Optimised CV rCCA
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+CV.rcc.nutrimouse <- rcc(X, Y, method = "ridge", 
+                         lambda1 = opt.l1, lambda2 = opt.l2) 
+```
+                         
+### Optimizing the model using Shrinkage
+Repeat optimization with shrinkage to then compare with ridge.
+Shrinkage is integrated within rcc() function, so there is no need for tune.rcc().
+
+Running the rCCA method using shrinkage
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+shrink.rcc.nutrimouse <- rcc(X,Y, method = 'shrinkage') 
+```
+
+Examine the optimal lambda values after shrinkage 
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='show'}
+shrink.rcc.nutrimouse$lambda 
+```
+
+Create the barplot of canonical correlations vs Dimentions
+A steep drop off in canonical correlation means less useful pairs of canonical variates
+
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+plot(CV.rcc.nutrimouse, type = "barplot", main = "Cross Validation") 
+
+plot(shrink.rcc.nutrimouse, type = "barplot", main = "Shrinkage")
+```
+
+### Result of comparison
+The two models generated above are both adequate, but for the ridge method it is recommended to repeat the tuning step multiple times. This results in increasing the resolution of tested lambda values to reach an optimum.
+
+## Plots
+
+### Sample Plot 1
+
+Code below creates a plot including information on the treatments. The model is optimised through ridge (CV rCCA data) and the plot is built using the first variate (comp = 1:2)
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+plotIndiv(CV.rcc.nutrimouse, comp = 1:2, 
+          ind.names = nutrimouse$genotype,
+          group = nutrimouse$diet, rep.space = "XY-variate", 
+          legend = TRUE, title = '(a) Nutrimouse, rCCA CV XY-space')
+
+plotIndiv(shrink.rcc.nutrimouse, comp = 1:2, 
+          ind.names = nutrimouse$genotype,
+          group = nutrimouse$diet, rep.space = "XY-variate", 
+          legend = TRUE, title = '(b) Nutrimouse, rCCA shrinkage XY-space')
+```
+
+The first variate seem to separate the genotype quite well (indicated by wt and ppar).
+Canonical variates corresponding to each data set are first averaged using the argument rep.space = 'XY-variate'. Samples are projected into the space spanned by the averaged canonical variates.
+{5 diets and 2 genotypes}
+
+Based on this plot it cannot be said which method would be better to use on this data.
+
+### Sample Plot 2 (Arrow Plot)
+
+Shows the relation between each sample’s projection into each dataset’s variate space.
+The start of each arrow represents the sample’s position in the space spanned by the X variates while the tip represents its position in the Y variate space. The longer each arrow, the higher the disparity between the datasets. 
+
+```{r echo=TRUE,  message=FALSE, warning=FALSE}
+plotArrow(CV.rcc.nutrimouse, group = nutrimouse$diet, 
+          col.per.group = color.mixo(1:5),
+          title = '(a) Nutrimouse, CV method')
+
+plotArrow(shrink.rcc.nutrimouse, group = nutrimouse$diet, 
+          col.per.group = color.mixo(1:5),
+          title = '(b) Nutrimouse, shrinkage method')
+```
+
+The yielded long arrows indicate that the "ridge" method is probably not the superior method for modeling the data. The shrinkage method, however, yields variates which produce much more homogeneous sample projections, depicted by the considerably shorter average arrow length.
+
+### Variable Plot 1
+
+Correlation circle plots can show the correlation between the gene expression and lipid concentration data, here in the first dimention. Use a cutof of 0.5 to remove negligible correlations.
+
+```{r echo=TRUE,  message=FALSE, warning=FALSE}
+plotVar(CV.rcc.nutrimouse, var.names = c(TRUE, TRUE),
+        cex = c(4, 4), cutoff = 0.5,
+        title = '(a) Nutrimouse, rCCA CV comp 1 - 2')
+
+plotVar(shrink.rcc.nutrimouse, var.names = c(TRUE, TRUE),
+        cex = c(4, 4), cutoff = 0.5,
+        title = '(b) Nutrimouse, rCCA shrinkage comp 1 - 2')
+```
+
+Genes and lipids appearing close to each other are considered correlated.
+Using this plot, determining which method is appropriate is based on the biological question.
+
+### Variable Plot 2 (Relevance Network Plot)
+
+The circular nodes represent genes and the rectangular nodes represent lipids. The bipartite relationships between these non-negligibly correlated features can be seen by the colour of the connecting lines (edges).
+
+
+```{r, echo=TRUE, fig.height=10, fig.width=15}
+network(CV.rcc.nutrimouse, comp = 1:2, interactive = FALSE,
+        lwd.edge = 3,
+        cutoff = 0.5)
+```
+There are roughly three clusters, each corresponding to a group of three genes, a group of five genes and a single gene. The group of three genes has some negative correlations while the rest of the network seems to be positively correlated.
+
+### Clustered Image Map (CIM)
+
+Helps determine the number of feature clusters. The correlations seen here do reflect that seen in relevance network plot - such that there are roughly three clusters.
+
+```{r, echo=TRUE, fig.height=10, fig.width=15}
+cim(CV.rcc.nutrimouse, comp = 1:2, xlab = "genes", ylab = "lipids")
+```
+CIM from the rCCA performed on the nutrimouse data. This shows the correlation structure for all bipartite relationships.
+
+```
+
+
